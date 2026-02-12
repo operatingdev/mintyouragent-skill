@@ -14,9 +14,11 @@ Usage:  python mya.py setup
         python mya.py launch --name "Token" --symbol "TKN" --description "..." --image "url"
         python mya.py wallet balance
 
-Version: 3.2.1
+Version: 3.5.0
 
 Changelog:
+- 3.5.0: Full poker CLI - history/verify/status commands, --json output, --headless/--poll flags
+- 3.4.0: Soul extraction + platform linking - mya.py soul / mya.py link
 - 3.3.0: Rate limit enforcement for native launches - preflight check before spending SOL
 - 3.2.1: Fixed pump.fun instruction accounts to match current IDL (16 accounts for buy, added volume/fee PDAs)
 - 3.2.0: Native pump.fun initial buy - bundles create+buy in one atomic tx (like webapp)
@@ -41,9 +43,11 @@ import hmac
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import signal
+import string
 # subprocess removed - triggered security scanners
 import sys
 import tempfile
@@ -92,6 +96,7 @@ class ExitCode(IntEnum):
     USER_CANCELLED = 8
     TIMEOUT = 9
     RATE_LIMIT_EXCEEDED = 10
+    NOT_FOUND = 11
 
 
 class Network(IntEnum):
@@ -111,7 +116,7 @@ class OutputFormat(IntEnum):
 
 class Constants:
     """Configuration constants."""
-    VERSION = "3.3.4"
+    VERSION = "3.5.0"
     
     # Limits
     MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
@@ -2717,6 +2722,271 @@ def cmd_config(args: argparse.Namespace) -> None:
         print("Usage: python mya.py config <show|set|autonomous>")
 
 
+def cmd_soul(args: argparse.Namespace) -> None:
+    """Extract agent personality into a privacy-safe summary for the platform."""
+    
+    # Common Clawdbot identity files
+    SOUL_FILES = [
+        "SOUL.md",
+        "IDENTITY.md", 
+        "USER.md",
+        "MEMORY.md",
+        "AGENTS.md",
+    ]
+    
+    # Find workspace root (look for SOUL.md or .git)
+    workspace = None
+    search_paths = [
+        Path.cwd(),
+        Path.home() / "clawd",
+        Path.home() / ".clawdbot",
+        Path(os.environ.get("CLAWDBOT_WORKSPACE", "")),
+    ]
+    
+    for path in search_paths:
+        if path.exists() and (path / "SOUL.md").exists():
+            workspace = path
+            break
+    
+    if not workspace:
+        Output.error("Could not find Clawdbot workspace (no SOUL.md found)")
+        Output.info("Run this from your Clawdbot workspace directory or set CLAWDBOT_WORKSPACE")
+        sys.exit(ExitCode.INVALID_INPUT)
+    
+    print(f"📍 Found workspace: {workspace}")
+    print()
+    
+    # Read available files
+    collected = {}
+    for filename in SOUL_FILES:
+        filepath = workspace / filename
+        if filepath.exists():
+            try:
+                content = filepath.read_text(encoding='utf-8')
+                collected[filename] = content
+                print(f"✓ Found {filename} ({len(content)} chars)")
+            except Exception as e:
+                print(f"⚠ Could not read {filename}: {e}")
+    
+    if not collected:
+        Output.error("No identity files found in workspace")
+        sys.exit(ExitCode.INVALID_INPUT)
+    
+    print()
+    
+    # Extract key information (privacy-safe)
+    soul_summary = {
+        "extracted_at": datetime.utcnow().isoformat() + "Z",
+        "source_files": list(collected.keys()),
+        "identity": {},
+        "personality": {},
+        "capabilities": [],
+    }
+    
+    # Parse IDENTITY.md
+    if "IDENTITY.md" in collected:
+        identity_content = collected["IDENTITY.md"]
+        # Extract name
+        name_match = re.search(r'\*\*Name:\*\*\s*(.+)', identity_content)
+        if name_match:
+            soul_summary["identity"]["name"] = name_match.group(1).strip()
+        # Extract creature/type
+        creature_match = re.search(r'\*\*Creature:\*\*\s*(.+)', identity_content)
+        if creature_match:
+            soul_summary["identity"]["creature"] = creature_match.group(1).strip()
+        # Extract emoji
+        emoji_match = re.search(r'\*\*Emoji:\*\*\s*(.+)', identity_content)
+        if emoji_match:
+            soul_summary["identity"]["emoji"] = emoji_match.group(1).strip()
+    
+    # Parse SOUL.md for personality traits
+    if "SOUL.md" in collected:
+        soul_content = collected["SOUL.md"]
+        # Look for key sections
+        if "proactive" in soul_content.lower():
+            soul_summary["personality"]["proactive"] = True
+        if "automat" in soul_content.lower():
+            soul_summary["personality"]["automation_focused"] = True
+        if "privacy" in soul_content.lower() or "security" in soul_content.lower():
+            soul_summary["personality"]["privacy_conscious"] = True
+        
+        # Extract any ## sections as traits
+        sections = re.findall(r'## ([^\n]+)', soul_content)
+        if sections:
+            soul_summary["personality"]["core_sections"] = [s.strip() for s in sections[:5]]
+    
+    # Extract capabilities from AGENTS.md
+    if "AGENTS.md" in collected:
+        agents_content = collected["AGENTS.md"]
+        # Look for tool/capability mentions
+        if "memory" in agents_content.lower():
+            soul_summary["capabilities"].append("memory_system")
+        if "knowledge graph" in agents_content.lower():
+            soul_summary["capabilities"].append("knowledge_graph")
+        if "cron" in agents_content.lower() or "heartbeat" in agents_content.lower():
+            soul_summary["capabilities"].append("scheduled_tasks")
+    
+    # Output
+    if args.json or getattr(args, 'format', 'text') == 'json':
+        print(json.dumps(soul_summary, indent=2))
+    else:
+        print("=" * 50)
+        print("🔮 SOUL EXTRACTION COMPLETE")
+        print("=" * 50)
+        print()
+        if soul_summary["identity"]:
+            print("Identity:")
+            for k, v in soul_summary["identity"].items():
+                print(f"  {k}: {v}")
+            print()
+        if soul_summary["personality"]:
+            print("Personality Traits:")
+            for k, v in soul_summary["personality"].items():
+                if isinstance(v, list):
+                    print(f"  {k}: {', '.join(v)}")
+                else:
+                    print(f"  {k}: {v}")
+            print()
+        if soul_summary["capabilities"]:
+            print("Capabilities:", ", ".join(soul_summary["capabilities"]))
+            print()
+    
+    # Save to file if requested
+    output_file = getattr(args, 'output_file', None)
+    if output_file:
+        Path(output_file).write_text(json.dumps(soul_summary, indent=2))
+        Output.success(f"Soul saved to {output_file}")
+    
+    # Offer to submit
+    if not args.json and not getattr(args, 'no_submit', False):
+        print()
+        print("To link this soul to your agent on mintyouragent.com:")
+        print("  python mya.py link --soul-file <file>")
+        print()
+        print("Or submit now? (requires wallet)")
+        try:
+            submit = input("Submit soul to platform? (y/N): ")
+            if submit.lower() in ('y', 'yes'):
+                # Store for link command
+                soul_file = get_data_dir() / "soul_extract.json"
+                soul_file.write_text(json.dumps(soul_summary, indent=2))
+                print(f"Soul saved to {soul_file}")
+                print("Run: python mya.py link")
+        except (KeyboardInterrupt, EOFError):
+            pass
+
+
+def cmd_link(args: argparse.Namespace) -> None:
+    """Link this agent to mintyouragent.com via wallet signature."""
+    
+    # Load wallet
+    wallet = load_wallet()
+    if not wallet:
+        Output.error("No wallet found. Run: python mya.py setup")
+        sys.exit(ExitCode.NO_WALLET)
+    
+    pubkey = str(wallet.pubkey())
+    print(f"🔗 Linking agent with wallet: {pubkey}")
+    print()
+    
+    # Load soul data
+    soul_file = getattr(args, 'soul_file', None)
+    if soul_file:
+        soul_path = Path(soul_file)
+    else:
+        soul_path = get_data_dir() / "soul_extract.json"
+    
+    soul_data = None
+    if soul_path.exists():
+        try:
+            soul_data = json.loads(soul_path.read_text())
+            print(f"✓ Loaded soul from {soul_path}")
+            if soul_data.get("identity", {}).get("name"):
+                print(f"  Name: {soul_data['identity']['name']}")
+        except Exception as e:
+            print(f"⚠ Could not load soul file: {e}")
+    else:
+        print("⚠ No soul extraction found. Run: python mya.py soul extract")
+        print("  Continuing with wallet-only link...")
+    
+    print()
+    
+    # Get challenge from API
+    api_url = get_api_url()
+    
+    print("Requesting link challenge from API...")
+    try:
+        resp = api_request(
+            "POST",
+            f"{api_url}/agent/link/challenge",
+            json={"wallet": pubkey}
+        )
+        if resp.status_code != 200:
+            Output.error("Failed to get challenge from API")
+            if resp:
+                print(f"Response: {resp.text}")
+            sys.exit(ExitCode.API_ERROR)
+        
+        challenge_data = resp.json()
+        challenge = challenge_data.get("challenge")
+        if not challenge:
+            Output.error("Invalid challenge response")
+            sys.exit(ExitCode.API_ERROR)
+        
+        print(f"✓ Got challenge: {challenge[:20]}...")
+    except Exception as e:
+        Output.error(f"API error: {e}")
+        sys.exit(ExitCode.NETWORK_ERROR)
+    
+    # Sign challenge
+    print("Signing challenge with wallet...")
+    try:
+        message_bytes = challenge.encode('utf-8')
+        signature = wallet.sign_message(message_bytes)
+        sig_b64 = base64.b64encode(bytes(signature)).decode('utf-8')
+        print("✓ Challenge signed")
+    except Exception as e:
+        Output.error(f"Signing failed: {e}")
+        sys.exit(ExitCode.SECURITY_ERROR)
+    
+    # Submit link request
+    print("Submitting link request...")
+    link_payload = {
+        "wallet": pubkey,
+        "challenge": challenge,
+        "signature": sig_b64,
+    }
+    
+    if soul_data:
+        link_payload["soul"] = soul_data
+    
+    try:
+        resp = api_request(
+            "POST",
+            f"{api_url}/agent/link",
+            json=link_payload
+        )
+        if resp.status_code == 200:
+            result = resp.json()
+            print()
+            Output.success("Agent linked successfully! 🎉")
+            print()
+            if result.get("agent_id"):
+                print(f"Agent ID: {result['agent_id']}")
+            if result.get("profile_url"):
+                print(f"Profile: {result['profile_url']}")
+            print()
+            print("You can now mint your agent NFT at mintyouragent.com")
+        else:
+            Output.error("Link failed")
+            if resp:
+                print(f"Response: {resp.text}")
+            sys.exit(ExitCode.API_ERROR)
+    except Exception as e:
+        Output.error(f"Link request failed: {e}")
+        sys.exit(ExitCode.NETWORK_ERROR)
+
+
 def cmd_uninstall(args: argparse.Namespace) -> None:
     """Remove local wallet files (cleanup utility)."""
     wallet_file = get_wallet_file()
@@ -2755,6 +3025,675 @@ def cmd_uninstall(args: argparse.Namespace) -> None:
     Output.success("Cleanup complete")
 
 
+# ============================================================================
+# Poker Commands
+# ============================================================================
+
+def get_poker_challenge(action: str) -> Tuple[str, str]:
+    """Generate challenge and sign it locally (matching Next.js format)"""
+    wallet = load_wallet()
+    if not wallet:
+        Output.error("No wallet found", "Run: python mya.py setup")
+        sys.exit(ExitCode.NO_WALLET)
+
+    pubkey = str(wallet.pubkey())
+    timestamp = int(time.time() * 1000)
+    nonce = ''.join(random.choices(string.ascii_lowercase + string.digits, k=13))
+
+    challenge = f"""MintYourAgent Challenge
+Action: {action}
+Wallet: {pubkey}
+Timestamp: {timestamp}
+Nonce: {nonce}
+
+This signature proves you own this wallet.
+Valid for 5 minutes."""
+
+    signature = wallet.sign_message(challenge.encode('utf-8'))
+    sig_b64 = base64.b64encode(bytes(signature)).decode('utf-8')
+    return challenge, sig_b64
+
+
+def format_card(card: str) -> str:
+    """Format poker card with suit emoji ('2h' -> '2♥️')"""
+    if not card or len(card) < 2:
+        return "??"
+
+    rank = card[0]
+    suit = card[1]
+
+    suit_emoji = {'h': '♥️', 'd': '♦️', 'c': '♣️', 's': '♠️'}
+    rank_display = {'T': '10', 'J': 'J', 'Q': 'Q', 'K': 'K', 'A': 'A'}
+
+    rank_str = rank_display.get(rank, rank)
+    suit_str = suit_emoji.get(suit, suit)
+
+    return f"{rank_str}{suit_str}"
+
+
+def format_hand(cards: List[str]) -> str:
+    """Format list of cards"""
+    return " ".join(format_card(c) for c in cards)
+
+
+def display_poker_table(game_data: Dict[str, Any], wallet_address: str) -> None:
+    """Display poker table state with cards, pot, player info"""
+    game_id = game_data.get('id', 'unknown')
+    pot_sol = game_data.get('pot', 0) / 1e9
+    betting_round = game_data.get('bettingRound', 'unknown')
+    community = game_data.get('communityCards', [])
+    your_hand = game_data.get('yourHand', [])
+    current_bet = game_data.get('currentBet', 0) / 1e9
+    your_turn = game_data.get('yourTurn', False)
+
+    print("\n╔═══════════════════════════════════════╗")
+    print(f"║  POKER TABLE - Game #{game_id[:8]}   ║")
+    print("╠═══════════════════════════════════════╣")
+    print(f"║  Pot: {pot_sol:.4f} SOL                    ║")
+    print(f"║  Round: {betting_round:<15}        ║")
+    if community:
+        print("╠═══════════════════════════════════════╣")
+        print(f"║  Community: {format_hand(community):<20} ║")
+    print("╠═══════════════════════════════════════╣")
+    if your_hand:
+        print(f"║  Your Hand: {format_hand(your_hand):<20} ║")
+    if current_bet > 0:
+        print(f"║  Current Bet: {current_bet:.4f} SOL         ║")
+    print("╚═══════════════════════════════════════╝")
+
+    if your_turn:
+        print(Output.color("  🎯 YOUR TURN", 'green'))
+
+
+def cmd_poker(args: argparse.Namespace) -> None:
+    """Poker command dispatcher"""
+    subcommand = getattr(args, 'poker_cmd', None)
+
+    if not subcommand:
+        print("Usage: python mya.py poker <command>")
+        print("\nCommands:")
+        print("  create   - Create new poker game")
+        print("  join     - Join existing game")
+        print("  watch    - Watch game with auto-polling")
+        print("  action   - Perform single action (fold/check/call/raise)")
+        print("  status   - Check game state (single poll)")
+        print("  games    - List games")
+        print("  history  - View action history for a game")
+        print("  stats    - Show your statistics")
+        print("  verify   - Verify provably fair deck")
+        print("  cancel   - Cancel a waiting game")
+        return
+
+    handlers = {
+        'create': cmd_poker_create,
+        'join': cmd_poker_join,
+        'watch': cmd_poker_watch,
+        'action': cmd_poker_action,
+        'status': cmd_poker_status,
+        'games': cmd_poker_games,
+        'history': cmd_poker_history,
+        'stats': cmd_poker_stats,
+        'verify': cmd_poker_verify,
+        'cancel': cmd_poker_cancel,
+    }
+
+    handler = handlers.get(subcommand)
+    if handler:
+        handler(args)
+    else:
+        Output.error(f"Unknown poker command: {subcommand}")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+
+def cmd_poker_create(args: argparse.Namespace) -> None:
+    """Create poker game"""
+    buy_in = getattr(args, 'buy_in', None)
+    if buy_in is None or buy_in < 0.01 or buy_in > 10:
+        Output.error("Buy-in must be between 0.01 and 10 SOL")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    wallet = load_wallet()
+    pubkey = str(wallet.pubkey())
+    api_url = get_api_url()
+
+    # Check balance before creating
+    balance = get_balance(pubkey)
+    required = buy_in + 0.01  # buy-in + tx fees
+    if balance < required:
+        Output.error(f"Insufficient balance. Need ~{required:.4f} SOL, have {balance:.4f} SOL")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    challenge, signature = get_poker_challenge("poker-create")
+
+    with Spinner("Creating game..."):
+        resp = api_request('POST', f"{api_url}/poker/create", json={
+            "walletAddress": pubkey,
+            "challenge": challenge,
+            "signature": signature,
+            "buyIn": buy_in
+        })
+        result = resp.json()
+
+    if not result.get('success'):
+        Output.error(result.get('error', 'Unknown error'))
+        sys.exit(ExitCode.API_ERROR)
+
+    rt = get_runtime()
+
+    game_id = result['game']['id']
+    escrow = result.get('escrow')
+
+    # If escrow transaction is returned, sign and confirm it
+    if escrow and escrow.get('unsignedTx'):
+        print("Signing escrow deposit transaction...")
+        try:
+            tx_bytes = base64.b64decode(escrow['unsignedTx'])
+            tx = SoldersTransaction.from_bytes(tx_bytes)
+            signed_tx = wallet.sign_transaction(tx)
+            signed_b64 = base64.b64encode(bytes(signed_tx)).decode('utf-8')
+
+            with Spinner("Confirming on-chain deposit..."):
+                confirm_challenge, confirm_sig = get_poker_challenge("poker-confirm-create")
+                confirm_resp = api_request('POST', f"{api_url}/poker/confirm-create", json={
+                    "walletAddress": pubkey,
+                    "challenge": confirm_challenge,
+                    "signature": confirm_sig,
+                    "signedTransaction": signed_b64,
+                    "buyIn": buy_in,
+                    "gameId": int(escrow['onChainGameId']),
+                })
+                confirm_result = confirm_resp.json()
+
+            if confirm_result.get('success'):
+                game_id = confirm_result['game']['id']
+                tx_sig = confirm_result['game'].get('createTx', '')
+                Output.success("Game created with on-chain escrow!")
+                print(f"\nGame ID: {game_id}")
+                print(f"Buy-in: {buy_in} SOL")
+                if tx_sig:
+                    print(f"Tx: https://solscan.io/tx/{tx_sig}?cluster=devnet")
+            else:
+                Output.warning("Escrow deposit failed, but game was created off-chain")
+                print(f"Error: {confirm_result.get('error', 'Unknown')}")
+        except Exception as e:
+            Output.warning(f"Escrow signing failed: {e}")
+            print("Game created without on-chain escrow (off-chain fallback)")
+    else:
+        Output.success("Game created successfully!")
+
+    if rt.format == OutputFormat.JSON:
+        Output.json_output(result)
+        return
+
+    print(f"\nGame ID: {game_id}")
+    print(f"Buy-in: {buy_in} SOL")
+    print(f"\nShare: python mya.py poker join {game_id}")
+
+
+def cmd_poker_join(args: argparse.Namespace) -> None:
+    """Join existing poker game"""
+    game_id = getattr(args, 'game_id', None)
+    if not game_id:
+        Output.error("Game ID required")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    wallet = load_wallet()
+    pubkey = str(wallet.pubkey())
+    api_url = get_api_url()
+
+    # Check balance (game buy-in will be fetched from the game, but check minimum)
+    balance = get_balance(pubkey)
+    if balance < 0.02:  # minimum buy-in (0.01) + fees
+        Output.error(f"Insufficient balance. Have {balance:.4f} SOL, need at least 0.02 SOL")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    challenge, signature = get_poker_challenge("poker-join")
+
+    with Spinner("Joining game..."):
+        resp = api_request('POST', f"{api_url}/poker/join", json={
+            "walletAddress": pubkey,
+            "challenge": challenge,
+            "signature": signature,
+            "gameId": game_id
+        })
+        result = resp.json()
+
+    if not result.get('success'):
+        Output.error(result.get('error', 'Unknown error'))
+        sys.exit(ExitCode.API_ERROR)
+
+    escrow = result.get('escrow')
+
+    # If escrow transaction is returned, sign and confirm it
+    if escrow and escrow.get('unsignedTx'):
+        print("Signing escrow deposit transaction...")
+        try:
+            tx_bytes = base64.b64decode(escrow['unsignedTx'])
+            tx = SoldersTransaction.from_bytes(tx_bytes)
+            signed_tx = wallet.sign_transaction(tx)
+            signed_b64 = base64.b64encode(bytes(signed_tx)).decode('utf-8')
+
+            with Spinner("Confirming on-chain deposit..."):
+                confirm_challenge, confirm_sig = get_poker_challenge("poker-confirm-join")
+                confirm_resp = api_request('POST', f"{api_url}/poker/confirm-join", json={
+                    "walletAddress": pubkey,
+                    "challenge": confirm_challenge,
+                    "signature": confirm_sig,
+                    "signedTransaction": signed_b64,
+                    "gameId": game_id,
+                })
+                confirm_result = confirm_resp.json()
+
+            if confirm_result.get('success'):
+                tx_sig = confirm_result['game'].get('joinTx', '')
+                Output.success("Joined game with on-chain escrow!")
+                if tx_sig:
+                    print(f"Tx: https://solscan.io/tx/{tx_sig}?cluster=devnet")
+            else:
+                Output.warning("Escrow deposit failed, but join was recorded")
+                print(f"Error: {confirm_result.get('error', 'Unknown')}")
+        except Exception as e:
+            Output.warning(f"Escrow signing failed: {e}")
+            print("Joined without on-chain escrow (off-chain fallback)")
+    else:
+        Output.success("Joined game successfully!")
+
+    rt = get_runtime()
+    if rt.format == OutputFormat.JSON:
+        Output.json_output(result)
+        return
+
+    display_poker_table(result['game'], pubkey)
+    print(f"\nWatch the game: python mya.py poker watch {game_id}")
+
+
+def cmd_poker_watch(args: argparse.Namespace) -> None:
+    """Auto-polling watch mode with action prompts"""
+    game_id = getattr(args, 'game_id', None)
+    if not game_id:
+        Output.error("Game ID required")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    wallet = load_wallet()
+    pubkey = str(wallet.pubkey())
+    api_url = get_api_url()
+    poll_interval = getattr(args, 'poll', 2)
+    headless = getattr(args, 'headless', False)
+    rt = get_runtime()
+
+    if not headless:
+        print(f"Watching game {game_id[:8]}...")
+        print(f"Polling every {poll_interval}s. Press Ctrl+C to stop.\n")
+
+    try:
+        while True:
+            resp = api_request('GET', f"{api_url}/poker/game/{game_id}?wallet={pubkey}")
+            game = resp.json()
+
+            # Headless JSON mode: output state once and exit
+            if headless or rt.format == OutputFormat.JSON:
+                Output.json_output(game)
+                if game.get('status') == 'completed' or game.get('yourTurn'):
+                    return
+                if headless:
+                    time.sleep(poll_interval)
+                    continue
+                return
+
+            if sys.stdout.isatty():
+                print("\033[H\033[J", end="")  # Clear screen
+
+            display_poker_table(game, pubkey)
+
+            if game.get('status') == 'completed':
+                winner = game.get('winner')
+                if isinstance(winner, dict):
+                    if winner.get('wallet') == pubkey:
+                        Output.success("You won!")
+                    else:
+                        Output.info(f"Game over. Winner: {winner.get('name') or winner.get('wallet', '?')[:8]}")
+                elif winner == pubkey:
+                    Output.success("You won!")
+                elif winner:
+                    Output.info("Game over. Opponent won.")
+                else:
+                    Output.info("Game ended in a tie.")
+                break
+
+            if game.get('yourTurn'):
+                print("\nYOUR TURN - Choose action:")
+                print("  fold | check | call | raise   (q to quit)")
+                action_input = input("Enter action: ").strip().lower()
+
+                if action_input == 'q':
+                    break
+
+                if action_input not in ['fold', 'check', 'call', 'raise']:
+                    continue
+
+                amount_lamports = None
+                if action_input == 'raise':
+                    amount = float(input("Raise amount (SOL): "))
+                    amount_lamports = int(amount * 1e9)
+
+                challenge, signature = get_poker_challenge(f"poker-{action_input}")
+
+                payload = {
+                    "walletAddress": pubkey,
+                    "challenge": challenge,
+                    "signature": signature,
+                    "gameId": game_id,
+                    "action": action_input
+                }
+                if amount_lamports:
+                    payload["amount"] = amount_lamports
+
+                api_request('POST', f"{api_url}/poker/action", json=payload)
+                time.sleep(1)
+            else:
+                time.sleep(poll_interval)
+
+    except KeyboardInterrupt:
+        Output.info("\nStopped watching.")
+
+
+def cmd_poker_action(args: argparse.Namespace) -> None:
+    """Perform single poker action"""
+    game_id = getattr(args, 'game_id', None)
+    action = getattr(args, 'action', None)
+
+    if not game_id or not action:
+        Output.error("Game ID and action required")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    wallet = load_wallet()
+    pubkey = str(wallet.pubkey())
+    api_url = get_api_url()
+
+    challenge, signature = get_poker_challenge(f"poker-{action}")
+
+    payload = {
+        "walletAddress": pubkey,
+        "challenge": challenge,
+        "signature": signature,
+        "gameId": game_id,
+        "action": action
+    }
+
+    if action == 'raise':
+        amount = getattr(args, 'amount', None)
+        if amount is None:
+            Output.error("--amount required for raise action")
+            sys.exit(ExitCode.INVALID_INPUT)
+        payload["amount"] = int(amount * 1e9)
+
+    with Spinner(f"Performing {action}..."):
+        resp = api_request('POST', f"{api_url}/poker/action", json=payload)
+        result = resp.json()
+
+    rt = get_runtime()
+    if rt.format == OutputFormat.JSON:
+        Output.json_output(result)
+        if not result.get('success'):
+            sys.exit(ExitCode.API_ERROR)
+        return
+
+    if result.get('success'):
+        Output.success(f"{action.capitalize()} successful!")
+        display_poker_table(result['game'], pubkey)
+    else:
+        Output.error(result.get('error', 'Unknown error'))
+        sys.exit(ExitCode.API_ERROR)
+
+
+def cmd_poker_games(args: argparse.Namespace) -> None:
+    """List poker games"""
+    api_url = get_api_url()
+    status_filter = getattr(args, 'status', None)
+
+    url = f"{api_url}/poker/games"
+    if status_filter:
+        url += f"?status={status_filter}"
+
+    with Spinner("Fetching games..."):
+        resp = api_request('GET', url)
+        result = resp.json()
+
+    rt = get_runtime()
+    if rt.format == OutputFormat.JSON:
+        Output.json_output(result)
+        return
+
+    games = result.get('games', [])
+
+    if not games:
+        print("No games found.")
+        return
+
+    print(f"\n{'ID':<8} {'Status':<10} {'Buy-in':<10} {'Player 1':<16} {'Player 2':<16} {'Created':<20}")
+    print("=" * 85)
+
+    for game in games:
+        game_id = game['id'][:8]
+        status = game.get('status', '?')
+        buy_in = game.get('buyInLamports', game.get('buy_in', 0)) / 1e9
+        created = game.get('createdAt', game.get('created_at', ''))[:19]
+        p1 = game.get('player1') or {}
+        p2 = game.get('player2') or {}
+        p1_name = (p1.get('name') or p1.get('wallet', '?')[:8]) if p1 else '-'
+        p2_name = (p2.get('name') or p2.get('wallet', '?')[:8]) if p2 else 'waiting...'
+        print(f"{game_id:<8} {status:<10} {buy_in:<10.4f} {p1_name:<16} {p2_name:<16} {created:<20}")
+
+    print(f"\nTotal: {result.get('total', len(games))} games")
+
+
+def cmd_poker_stats(args: argparse.Namespace) -> None:
+    """Show poker statistics"""
+    wallet = load_wallet()
+    pubkey = str(wallet.pubkey())
+    api_url = get_api_url()
+
+    with Spinner("Fetching stats..."):
+        resp = api_request('GET', f"{api_url}/stats?wallet={pubkey}")
+        result = resp.json()
+
+    rt = get_runtime()
+    if rt.format == OutputFormat.JSON:
+        Output.json_output(result)
+        if not result.get('agent'):
+            sys.exit(ExitCode.NOT_FOUND)
+        return
+
+    if not result.get('agent'):
+        Output.error("Agent not found. Register first with: python mya.py link")
+        sys.exit(ExitCode.NOT_FOUND)
+
+    agent = result['agent']
+    games_played = agent.get('games_played', 0)
+    games_won = agent.get('games_won', 0)
+    total_winnings = agent.get('total_winnings', 0) / 1e9
+
+    win_rate = (games_won / games_played * 100) if games_played > 0 else 0
+
+    print("\n╔══════════════════════════════════╗")
+    print("║       POKER STATISTICS           ║")
+    print("╠══════════════════════════════════╣")
+    print(f"║  Games Played: {games_played:<17} ║")
+    print(f"║  Games Won: {games_won:<20} ║")
+    print(f"║  Win Rate: {win_rate:.1f}%{' ' * (20 - len(f'{win_rate:.1f}%'))} ║")
+    print(f"║  Total Winnings: {total_winnings:.4f} SOL{' ' * (11 - len(f'{total_winnings:.4f}'))} ║")
+    print("╚══════════════════════════════════╝\n")
+
+
+def cmd_poker_cancel(args: argparse.Namespace) -> None:
+    """Cancel a waiting poker game"""
+    game_id = getattr(args, 'game_id', None)
+    if not game_id:
+        Output.error("Game ID required")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    wallet = load_wallet()
+    pubkey = str(wallet.pubkey())
+    api_url = get_api_url()
+
+    challenge, signature = get_poker_challenge("poker-cancel")
+
+    with Spinner("Cancelling game..."):
+        resp = api_request('POST', f"{api_url}/poker/cancel", json={
+            "walletAddress": pubkey,
+            "challenge": challenge,
+            "signature": signature,
+            "gameId": game_id,
+        })
+        result = resp.json()
+
+    rt = get_runtime()
+    if rt.format == OutputFormat.JSON:
+        Output.json_output(result)
+        if not result.get('success'):
+            sys.exit(ExitCode.API_ERROR)
+        return
+
+    if result.get('success'):
+        Output.success("Game cancelled successfully!")
+        if result.get('refundTx'):
+            print(f"Refund tx: https://solscan.io/tx/{result['refundTx']}?cluster=devnet")
+    else:
+        Output.error(result.get('error', 'Unknown error'))
+        sys.exit(ExitCode.API_ERROR)
+
+
+def cmd_poker_status(args: argparse.Namespace) -> None:
+    """Check current game state (single poll)"""
+    game_id = getattr(args, 'game_id', None)
+    if not game_id:
+        Output.error("Game ID required")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    wallet = load_wallet()
+    pubkey = str(wallet.pubkey())
+    api_url = get_api_url()
+
+    with Spinner("Fetching game state..."):
+        resp = api_request('GET', f"{api_url}/poker/game/{game_id}?wallet={pubkey}")
+        game = resp.json()
+
+    rt = get_runtime()
+    if rt.format == OutputFormat.JSON:
+        Output.json_output(game)
+        return
+
+    if game.get('error'):
+        Output.error(game['error'])
+        sys.exit(ExitCode.API_ERROR)
+
+    display_poker_table(game, pubkey)
+
+    status = game.get('status', 'unknown')
+    if status == 'completed':
+        winner = game.get('winner')
+        if winner and winner.get('wallet') == pubkey:
+            Output.success("You won!")
+        elif winner:
+            Output.info(f"Game over. Winner: {winner.get('name') or winner.get('wallet', '?')[:8]}")
+        else:
+            Output.info("Game ended in a tie.")
+    elif status == 'waiting':
+        Output.info("Waiting for opponent to join...")
+    elif game.get('yourTurn'):
+        print("\n  YOUR TURN - actions: fold | check | call | raise")
+        print(f"  python mya.py poker action {game_id} <action>")
+    else:
+        Output.info("Waiting for opponent's move...")
+
+
+def cmd_poker_history(args: argparse.Namespace) -> None:
+    """Show action history for a poker game"""
+    game_id = getattr(args, 'game_id', None)
+    if not game_id:
+        Output.error("Game ID required")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    api_url = get_api_url()
+
+    with Spinner("Fetching action history..."):
+        resp = api_request('GET', f"{api_url}/poker/game/{game_id}/actions")
+        result = resp.json()
+
+    rt = get_runtime()
+    if rt.format == OutputFormat.JSON:
+        Output.json_output(result)
+        return
+
+    actions = result.get('actions', [])
+    if not actions:
+        print("No actions recorded for this game.")
+        return
+
+    print(f"\nAction History — Game {game_id[:8]}...")
+    print(f"{'#':<4} {'Player':<15} {'Action':<8} {'Amount':<12} {'Round':<10} {'Pot After':<12}")
+    print("=" * 65)
+    for i, a in enumerate(actions, 1):
+        player = a.get('player') or {}
+        player_name = player.get('name') or (player.get('wallet', '?')[:8] if player.get('wallet') else '?')
+        amount_val = a.get('amount')
+        amount = f"{amount_val / 1e9:.4f}" if amount_val else '-'
+        pot_after_val = a.get('potAfter')
+        pot_after = f"{pot_after_val / 1e9:.4f}" if pot_after_val else '-'
+        round_name = a.get('bettingRound', '?')
+        print(f"{i:<4} {player_name:<15} {a.get('action', '?'):<8} {amount:<12} {round_name:<10} {pot_after:<12}")
+
+    print(f"\nTotal actions: {result.get('total', len(actions))}")
+
+
+def cmd_poker_verify(args: argparse.Namespace) -> None:
+    """Verify provably fair deck for a completed game"""
+    game_id = getattr(args, 'game_id', None)
+    if not game_id:
+        Output.error("Game ID required")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    api_url = get_api_url()
+
+    with Spinner("Verifying deck fairness..."):
+        resp = api_request('GET', f"{api_url}/poker/verify?gameId={game_id}")
+        result = resp.json()
+
+    rt = get_runtime()
+    if rt.format == OutputFormat.JSON:
+        Output.json_output(result)
+        return
+
+    if result.get('error'):
+        Output.error(result['error'])
+        sys.exit(ExitCode.API_ERROR)
+
+    verified = result.get('verified')
+    if verified is True:
+        Output.success("DECK VERIFIED — Provably fair!")
+    elif verified is False:
+        Output.error("VERIFICATION FAILED — Deck may have been tampered with!")
+    else:
+        Output.info(result.get('message', 'Verification not available'))
+
+    if result.get('deckHash'):
+        print(f"\n  Deck Hash:     {result['deckHash']}")
+    if result.get('serverSecret'):
+        print(f"  Server Secret: {result['serverSecret']}")
+    if result.get('deckSeed'):
+        print(f"  Deck Seed:     {result['deckSeed']}")
+
+    game_info = result.get('game', {})
+    if game_info.get('pot'):
+        print(f"\n  Pot: {game_info['pot'] / 1e9:.4f} SOL")
+    if game_info.get('player1Hand'):
+        print(f"  Player 1 Hand: {format_hand(game_info['player1Hand'])}")
+    if game_info.get('player2Hand'):
+        print(f"  Player 2 Hand: {format_hand(game_info['player2Hand'])}")
+    if game_info.get('communityCards'):
+        print(f"  Community:     {format_hand(game_info['communityCards'])}")
+
+
 def cmd_help_all(args: argparse.Namespace) -> None:
     """Show all help (Issue #149)."""
     print(f"""
@@ -2776,6 +3715,8 @@ COMMANDS:
   airdrop             Request devnet airdrop
   transfer            Transfer SOL
   sign                Sign a message
+  soul                Extract agent personality (privacy-safe)
+  link                Link agent to mintyouragent.com
   config              Manage configuration
   uninstall           Remove all data
 
@@ -2973,10 +3914,56 @@ def main() -> None:
     config_p.add_argument("key", nargs="?")
     config_p.add_argument("value", nargs="?")
     
+    # Soul - extract agent personality
+    soul_p = subparsers.add_parser("soul", help="Extract agent soul/personality")
+    soul_p.add_argument("--no-submit", action="store_true", help="Don't prompt to submit")
+    soul_p.add_argument("-o", "--output-file", help="Save soul JSON to file")
+    
+    # Link - connect agent to platform
+    link_p = subparsers.add_parser("link", help="Link agent to mintyouragent.com")
+    link_p.add_argument("--soul-file", help="Soul JSON file to include")
+    
     # Uninstall
     uninstall_p = subparsers.add_parser("uninstall", help="Remove data")
     uninstall_p.add_argument("-y", "--yes", action="store_true")
-    
+
+    # Poker commands
+    poker_p = subparsers.add_parser("poker", aliases=["p"], help="Play poker")
+    poker_subs = poker_p.add_subparsers(dest="poker_cmd")
+
+    poker_create_p = poker_subs.add_parser("create", help="Create game")
+    poker_create_p.add_argument("--buy-in", type=float, required=True, help="Buy-in amount in SOL (0.01-10)")
+
+    poker_join_p = poker_subs.add_parser("join", help="Join game")
+    poker_join_p.add_argument("game_id", help="Game ID to join")
+
+    poker_watch_p = poker_subs.add_parser("watch", help="Watch game with auto-polling")
+    poker_watch_p.add_argument("game_id", help="Game ID to watch")
+    poker_watch_p.add_argument("--poll", type=int, default=2, help="Poll interval in seconds (default: 2)")
+    poker_watch_p.add_argument("--headless", action="store_true", help="Non-interactive mode for AI agents (no stdin prompts)")
+
+    poker_action_p = poker_subs.add_parser("action", help="Perform action")
+    poker_action_p.add_argument("game_id", help="Game ID")
+    poker_action_p.add_argument("action", choices=["fold", "check", "call", "raise"], help="Action to perform")
+    poker_action_p.add_argument("--amount", type=float, help="Raise amount in SOL (required for raise)")
+
+    poker_status_p = poker_subs.add_parser("status", help="Check game state (single poll)")
+    poker_status_p.add_argument("game_id", help="Game ID")
+
+    poker_games_p = poker_subs.add_parser("games", help="List games")
+    poker_games_p.add_argument("--status", choices=["waiting", "active", "completed"], help="Filter by status")
+
+    poker_history_p = poker_subs.add_parser("history", help="View action history for a game")
+    poker_history_p.add_argument("game_id", help="Game ID")
+
+    poker_stats_p = poker_subs.add_parser("stats", help="Show poker statistics")
+
+    poker_verify_p = poker_subs.add_parser("verify", help="Verify provably fair deck")
+    poker_verify_p.add_argument("game_id", help="Game ID")
+
+    poker_cancel_p = poker_subs.add_parser("cancel", help="Cancel a waiting game")
+    poker_cancel_p.add_argument("game_id", help="Game ID to cancel")
+
     args = parser.parse_args()
     
     # Show full help
@@ -3024,7 +4011,9 @@ def main() -> None:
         "verify": cmd_verify, "status": cmd_status, "trending": cmd_trending,
         "leaderboard": cmd_leaderboard, "stats": cmd_stats, "airdrop": cmd_airdrop,
         "transfer": cmd_transfer, "sign": cmd_sign, "collect-fees": cmd_collect_fees,
-        "fees": cmd_collect_fees, "sell": cmd_sell, "config": cmd_config, "uninstall": cmd_uninstall,
+        "fees": cmd_collect_fees, "sell": cmd_sell, "config": cmd_config,
+        "soul": cmd_soul, "link": cmd_link, "uninstall": cmd_uninstall,
+        "poker": cmd_poker,
     }
     
     if args.command in commands:
