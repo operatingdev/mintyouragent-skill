@@ -1636,19 +1636,46 @@ def cmd_setup(args: argparse.Namespace) -> None:
     log_info(f"Wallet created: {address}")
     add_to_history("setup", {"address": address})
     
+    # Get the private key for display
+    private_key_b58 = b58_encode(bytes(keypair))
+
     if rt.format == OutputFormat.JSON:
-        Output.json_output({"success": True, "address": address, "data_dir": str(get_data_dir())})
+        Output.json_output({
+            "success": True,
+            "address": address,
+            "private_key": private_key_b58,
+            "data_dir": str(get_data_dir()),
+            "next_steps": "Import private key into Phantom/Solflare, then connect at mintyouragent.com"
+        })
     else:
         Output.success("Wallet created!")
         print(f"{Constants.EMOJI['address']} Address: {address}")
-        print(f"{Constants.EMOJI['folder']} Data: {get_data_dir()}")
-        print(f"{Constants.EMOJI['lock']} Recovery: {recovery_file}")
         print("")
-        Output.warning("Back up your RECOVERY_KEY.txt file!")
-        
+        print("\u2501" * 50)
+        print(f"{Constants.EMOJI['lock']} YOUR PRIVATE KEY (copy this now!):")
+        print("")
+        print(f"  {private_key_b58}")
+        print("")
+        print("\u2501" * 50)
+        print("")
+        print(f"{Constants.EMOJI['info']} NEXT STEPS:")
+        print("  1. Copy the private key above")
+        print("  2. Open Phantom or Solflare wallet")
+        print("  3. Go to Settings \u2192 Import Private Key")
+        print("  4. Paste the key and save")
+        print("  5. Visit mintyouragent.com and connect that wallet")
+        print("")
+        Output.warning("NEVER share this key with anyone!")
+        print(f"{Constants.EMOJI['lock']} Backup saved to: {recovery_file}")
+
         if HAS_QRCODE and not rt.no_emoji:
             print("\nScan to receive SOL:")
             Output.show_qr(address)
+
+    # Clear private key from memory
+    private_key_ba = bytearray(private_key_b58.encode())
+    clear_buffer(private_key_ba)
+    del private_key_b58
 
 
 def cmd_wallet(args: argparse.Namespace) -> None:
@@ -1707,16 +1734,33 @@ def cmd_wallet(args: argparse.Namespace) -> None:
         except Exception as e:
             Output.error("Network error", f"View at: https://solscan.io/account/{address}")
     
-    elif args.wallet_cmd == "export":
-        Output.warning("SIGNING KEY - DO NOT SHARE!")
+    elif args.wallet_cmd in ("export", "show-key"):
         b58_auth = b58_encode(bytes(keypair))
-        
+
         if rt.format == OutputFormat.JSON:
             Output.json_output({"signing_key": b58_auth, "address": address})
         else:
-            print("\nBase58 Signing Key:")
-            print(b58_auth)
-        
+            print("")
+            print("\u2501" * 50)
+            print(f"{Constants.EMOJI['lock']} YOUR PRIVATE KEY:")
+            print("")
+            print(f"  {b58_auth}")
+            print("")
+            print("\u2501" * 50)
+            print("")
+            print(f"{Constants.EMOJI['info']} TO IMPORT INTO BROWSER WALLET:")
+            print("  1. Copy the private key above")
+            print("  2. Open Phantom or Solflare wallet")
+            print("  3. Go to Settings \u2192 Import Private Key")
+            print("  4. Paste the key and save")
+            print("")
+            Output.warning("NEVER share this key with anyone!")
+
+        # Clear key from memory
+        key_ba = bytearray(b58_auth.encode())
+        clear_buffer(key_ba)
+        del b58_auth
+
         log_info("Signing key exported")
     
     elif args.wallet_cmd == "fund":
@@ -1754,12 +1798,13 @@ def cmd_wallet(args: argparse.Namespace) -> None:
     else:
         print("Usage: python mya.py wallet <command>")
         print("\nCommands:")
-        print("  address   Show wallet address")
-        print("  balance   Show SOL balance")
-        print("  export    Export signing key")
-        print("  fund      Funding instructions")
-        print("  check     Check launch limit")
-        print("  import    Import existing wallet")
+        print("  address    Show wallet address")
+        print("  balance    Show SOL balance")
+        print("  show-key   Show private key with import instructions")
+        print("  export     Export signing key (alias for show-key)")
+        print("  fund       Funding instructions")
+        print("  check      Check launch limit")
+        print("  import     Import existing wallet")
 
 
 def cmd_tokens(args: argparse.Namespace) -> None:
@@ -3830,7 +3875,7 @@ def main() -> None:
     
     # Wallet
     wallet_p = subparsers.add_parser("wallet", aliases=["w"], help="Wallet commands")
-    wallet_p.add_argument("wallet_cmd", nargs="?", default="help", choices=["address", "balance", "export", "fund", "check", "import", "help"])
+    wallet_p.add_argument("wallet_cmd", nargs="?", default="help", choices=["address", "balance", "export", "show-key", "fund", "check", "import", "help"])
     wallet_p.add_argument("--key")
     
     # Launch
