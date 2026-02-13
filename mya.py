@@ -3133,32 +3133,236 @@ def format_hand(cards: List[str]) -> str:
 
 
 def display_poker_table(game_data: Dict[str, Any], wallet_address: str) -> None:
-    """Display poker table state with cards, pot, player info"""
+    """Display poker table state with cards, pot, player info, chips, and timer"""
     game_id = game_data.get('id', 'unknown')
     pot_sol = game_data.get('pot', 0) / 1e9
     betting_round = game_data.get('bettingRound', 'unknown')
     community = game_data.get('communityCards', [])
     your_hand = game_data.get('yourHand', [])
+    opponent_hand = game_data.get('opponentHand', [])
     current_bet = game_data.get('currentBet', 0) / 1e9
     your_turn = game_data.get('yourTurn', False)
+    your_chips = game_data.get('yourChips', game_data.get('player1Chips', 0))
+    opp_chips = game_data.get('opponentChips', game_data.get('player2Chips', 0))
+    status = game_data.get('status', 'unknown')
 
-    print("\n╔═══════════════════════════════════════╗")
-    print(f"║  POKER TABLE - Game #{game_id[:8]}   ║")
-    print("╠═══════════════════════════════════════╣")
-    print(f"║  Pot: {pot_sol:.4f} SOL                    ║")
-    print(f"║  Round: {betting_round:<15}        ║")
-    if community:
-        print("╠═══════════════════════════════════════╣")
-        print(f"║  Community: {format_hand(community):<20} ║")
-    print("╠═══════════════════════════════════════╣")
-    if your_hand:
-        print(f"║  Your Hand: {format_hand(your_hand):<20} ║")
+    # Player info
+    p1 = game_data.get('player1', {}) or {}
+    p2 = game_data.get('player2', {}) or {}
+    p1_name = p1.get('name') or (p1.get('wallet', '???')[:8] + '...' if p1.get('wallet') else '???')
+    p2_name = p2.get('name') or (p2.get('wallet', '???')[:8] + '...' if p2.get('wallet') else 'Waiting...')
+
+    # Determine which player we are
+    am_p1 = p1.get('wallet') == wallet_address
+    am_p2 = p2.get('wallet') == wallet_address
+    my_name = "You" if (am_p1 or am_p2) else p1_name
+    opp_name = p2_name if am_p1 else p1_name if am_p2 else p2_name
+
+    if am_p1:
+        my_chips_sol = (game_data.get('player1Chips', 0) or your_chips) / 1e9
+        opp_chips_sol = (game_data.get('player2Chips', 0) or opp_chips) / 1e9
+    elif am_p2:
+        my_chips_sol = (game_data.get('player2Chips', 0) or your_chips) / 1e9
+        opp_chips_sol = (game_data.get('player1Chips', 0) or opp_chips) / 1e9
+    else:
+        my_chips_sol = (game_data.get('player1Chips', 0)) / 1e9
+        opp_chips_sol = (game_data.get('player2Chips', 0)) / 1e9
+
+    # Timer
+    turn_deadline = game_data.get('turnDeadline')
+    timer_str = ""
+    if turn_deadline and status == 'active':
+        try:
+            from datetime import datetime, timezone
+            deadline_dt = datetime.fromisoformat(turn_deadline.replace('Z', '+00:00'))
+            remaining = (deadline_dt - datetime.now(timezone.utc)).total_seconds()
+            remaining = max(0, int(remaining))
+            mins, secs = divmod(remaining, 60)
+            timer_str = f" ⏱ {mins}:{secs:02d}"
+            if remaining < 30:
+                timer_str = Output.color(timer_str, 'red')
+        except Exception:
+            pass
+
+    W = 45
+    print()
+    print("┌" + "─" * W + "┐")
+    print(f"│{'POKER TABLE':^{W}}│")
+    print(f"│{'Game #' + game_id[:8] + '  ' + betting_round.upper() + timer_str:^{W}}│")
+    print("├" + "─" * W + "┤")
+
+    # Opponent area
+    opp_line = f"  {opp_name}  ({opp_chips_sol:.4f} SOL)"
+    print(f"│{opp_line:<{W}}│")
+    if opponent_hand:
+        opp_cards = f"  Cards: {format_hand(opponent_hand)}"
+    else:
+        opp_cards = "  Cards: [🂠] [🂠]"
+    print(f"│{opp_cards:<{W}}│")
+    print("├" + "─" * W + "┤")
+
+    # Board
+    pot_line = f"  Pot: {pot_sol:.4f} SOL"
+    print(f"│{pot_line:<{W}}│")
     if current_bet > 0:
-        print(f"║  Current Bet: {current_bet:.4f} SOL         ║")
-    print("╚═══════════════════════════════════════╝")
+        bet_line = f"  Bet to match: {current_bet:.4f} SOL"
+        print(f"│{bet_line:<{W}}│")
+    if community:
+        board_line = f"  Board: {format_hand(community)}"
+    else:
+        board_line = "  Board: (no cards yet)"
+    print(f"│{board_line:<{W}}│")
+    print("├" + "─" * W + "┤")
 
-    if your_turn:
-        print(Output.color("  🎯 YOUR TURN", 'green'))
+    # Your area
+    my_line = f"  {my_name}  ({my_chips_sol:.4f} SOL)"
+    print(f"│{my_line:<{W}}│")
+    if your_hand:
+        my_cards = f"  Hand: {format_hand(your_hand)}"
+    else:
+        my_cards = "  Hand: [🂠] [🂠]"
+    print(f"│{my_cards:<{W}}│")
+    print("└" + "─" * W + "┘")
+
+    if status == 'completed':
+        winner = game_data.get('winner')
+        if isinstance(winner, dict):
+            w_name = winner.get('name') or (winner.get('wallet', '???')[:8] + '...')
+        else:
+            w_name = str(winner)[:8] + '...' if winner else 'Tie'
+        print(Output.color(f"  🏆 WINNER: {w_name}  ({pot_sol:.4f} SOL)", 'yellow'))
+    elif your_turn:
+        print(Output.color("  🎯 YOUR TURN — fold | check | call | raise", 'green'))
+    elif status == 'active':
+        print(Output.color("  ⏳ Waiting for opponent...", 'cyan'))
+
+
+def ai_decide_poker_action(game_data: Dict[str, Any]) -> Tuple[str, Optional[int], str]:
+    """Simple AI poker strategy — returns (action, amount_lamports_or_none, reasoning)"""
+    your_hand = game_data.get('yourHand', [])
+    community = game_data.get('communityCards', [])
+    current_bet = game_data.get('currentBet', 0)
+    your_chips = game_data.get('yourChips', 0)
+    pot = game_data.get('pot', 0)
+
+    # Determine my bet from game data
+    p1 = game_data.get('player1', {}) or {}
+    p2 = game_data.get('player2', {}) or {}
+    my_bet = game_data.get('player1Bet', 0)  # fallback
+    if game_data.get('yourTurn'):
+        # We need to figure out our current bet level
+        pass
+
+    to_call = current_bet - my_bet
+    if to_call < 0:
+        to_call = 0
+
+    # Evaluate hand strength (simple heuristic)
+    high_cards = set('TJQKA')
+    rank_names = {'T': '10', 'J': 'Jack', 'Q': 'Queen', 'K': 'King', 'A': 'Ace'}
+    pairs_count = 0
+    ranks = []
+
+    for card in your_hand:
+        if isinstance(card, str) and len(card) >= 2:
+            ranks.append(card[0])
+        elif isinstance(card, dict):
+            ranks.append(card.get('rank', ''))
+
+    # Check for pairs
+    if len(ranks) >= 2 and ranks[0] == ranks[1]:
+        pairs_count = 1
+
+    # Include community cards in evaluation
+    all_ranks = list(ranks)
+    for card in community:
+        if isinstance(card, str) and len(card) >= 2:
+            all_ranks.append(card[0])
+        elif isinstance(card, dict):
+            all_ranks.append(card.get('rank', ''))
+
+    # Count pairs/trips in all cards
+    from collections import Counter
+    rank_counts = Counter(all_ranks)
+    max_of_kind = max(rank_counts.values()) if rank_counts else 0
+
+    # Hand strength score (0-1)
+    strength = 0.3  # base
+
+    # High cards bonus
+    high_count = sum(1 for r in ranks if r in high_cards)
+    strength += high_count * 0.1
+
+    # Pairs/trips/quads
+    if max_of_kind >= 4:
+        strength = 0.95
+    elif max_of_kind >= 3:
+        strength = 0.85
+    elif max_of_kind >= 2:
+        strength += 0.25
+
+    # Suited bonus
+    suits = []
+    for card in your_hand:
+        if isinstance(card, str) and len(card) >= 2:
+            suits.append(card[-1])
+    if len(suits) >= 2 and suits[0] == suits[1]:
+        strength += 0.05
+
+    strength = min(1.0, strength)
+
+    # Build hand description for reasoning
+    hand_desc_parts = []
+    if max_of_kind >= 4:
+        hand_desc_parts.append("four of a kind")
+    elif max_of_kind >= 3:
+        hand_desc_parts.append("three of a kind")
+    elif max_of_kind >= 2:
+        # Find which rank is paired
+        paired = [r for r, c in rank_counts.items() if c >= 2]
+        paired_names = [rank_names.get(r, r) for r in paired]
+        hand_desc_parts.append(f"pair of {'/'.join(paired_names)}s")
+    if high_count > 0:
+        high_names = [rank_names.get(r, r) for r in ranks if r in high_cards]
+        hand_desc_parts.append(f"high: {', '.join(high_names)}")
+    hand_desc = ", ".join(hand_desc_parts) if hand_desc_parts else "no made hand"
+
+    # Decision logic
+    if to_call == 0:
+        # No bet to match
+        if strength > 0.6:
+            raise_amount = max(int(pot * 0.5), 10000000)  # min 0.01 SOL
+            raise_amount = min(raise_amount, your_chips)
+            if raise_amount > 0:
+                reasoning = f"Hand strength: {strength:.2f} ({hand_desc}). No bet to match. Strong hand — raising {raise_amount / 1e9:.4f} SOL."
+                return ('raise', raise_amount, reasoning)
+        reasoning = f"Hand strength: {strength:.2f} ({hand_desc}). No bet to match. Checking."
+        return ('check', None, reasoning)
+    else:
+        # There's a bet to match
+        pot_odds = to_call / (pot + to_call) if (pot + to_call) > 0 else 1.0
+        pot_odds_str = f"Pot odds: {pot_odds:.2f}"
+
+        if strength > 0.7:
+            raise_amount = max(int(pot * 0.5), 10000000)
+            raise_amount = min(raise_amount, your_chips - to_call)
+            if raise_amount > 0:
+                reasoning = f"Hand strength: {strength:.2f} ({hand_desc}). {pot_odds_str}. Strong hand — raising."
+                return ('raise', raise_amount, reasoning)
+            reasoning = f"Hand strength: {strength:.2f} ({hand_desc}). {pot_odds_str}. Strong hand — calling."
+            return ('call', None, reasoning)
+        elif strength > pot_odds + 0.1:
+            reasoning = f"Hand strength: {strength:.2f} ({hand_desc}). {pot_odds_str}. Good odds — calling."
+            return ('call', None, reasoning)
+        elif strength > 0.35:
+            if to_call < pot * 0.3:
+                reasoning = f"Hand strength: {strength:.2f} ({hand_desc}). {pot_odds_str}. Borderline, small bet — calling."
+                return ('call', None, reasoning)
+            reasoning = f"Hand strength: {strength:.2f} ({hand_desc}). {pot_odds_str}. Borderline, bet too large — folding."
+            return ('fold', None, reasoning)
+        else:
+            reasoning = f"Hand strength: {strength:.2f} ({hand_desc}). {pot_odds_str}. Weak hand — folding."
+            return ('fold', None, reasoning)
 
 
 def cmd_poker(args: argparse.Namespace) -> None:
@@ -3167,7 +3371,7 @@ def cmd_poker(args: argparse.Namespace) -> None:
 
     if not subcommand:
         print("Usage: python mya.py poker <command>")
-        print("\nCommands:")
+        print("\nClassic (2-player) Commands:")
         print("  create   - Create new poker game")
         print("  join     - Join existing game")
         print("  watch    - Watch game with auto-polling")
@@ -3178,6 +3382,13 @@ def cmd_poker(args: argparse.Namespace) -> None:
         print("  stats    - Show your statistics")
         print("  verify   - Verify provably fair deck")
         print("  cancel   - Cancel a waiting game")
+        print("\nCash Game (2-6 player) Commands:")
+        print("  cash     - Multi-player cash game subcommands")
+        return
+
+    # Handle 'cash' subcommand tree
+    if subcommand == 'cash':
+        cmd_poker_cash(args)
         return
 
     handlers = {
@@ -3199,6 +3410,673 @@ def cmd_poker(args: argparse.Namespace) -> None:
     else:
         Output.error(f"Unknown poker command: {subcommand}")
         sys.exit(ExitCode.INVALID_INPUT)
+
+
+# ============================================================================
+# Cash Game Commands (Multi-Player)
+# ============================================================================
+
+def cmd_poker_cash(args: argparse.Namespace) -> None:
+    """Cash game command dispatcher"""
+    cash_cmd = getattr(args, 'cash_cmd', None)
+
+    if not cash_cmd:
+        print("Usage: python mya.py poker cash <command>")
+        print("\nCommands:")
+        print("  create   - Create a new cash game table")
+        print("  join     - Join a table and deposit buy-in")
+        print("  leave    - Leave a table (chips settled)")
+        print("  reload   - Add more chips to your stack")
+        print("  watch    - Watch a table with auto-polling")
+        print("  tables   - List open/active tables")
+        return
+
+    cash_handlers = {
+        'create': cmd_cash_create,
+        'join': cmd_cash_join,
+        'leave': cmd_cash_leave,
+        'reload': cmd_cash_reload,
+        'watch': cmd_cash_watch,
+        'tables': cmd_cash_tables,
+    }
+
+    handler = cash_handlers.get(cash_cmd)
+    if handler:
+        handler(args)
+    else:
+        Output.error(f"Unknown cash command: {cash_cmd}")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+
+def cmd_cash_create(args: argparse.Namespace) -> None:
+    """Create a new cash game table"""
+    small_blind = getattr(args, 'small_blind', 0.01)
+    big_blind = getattr(args, 'big_blind', 0.02)
+    min_buy_in = getattr(args, 'min_buy_in', None) or big_blind * 20
+    max_buy_in = getattr(args, 'max_buy_in', None) or big_blind * 100
+    max_seats = getattr(args, 'seats', 6)
+
+    wallet = load_wallet()
+    pubkey = str(wallet.pubkey())
+    api_url = get_api_url()
+
+    challenge, signature = get_poker_challenge("cash-create-table")
+
+    with Spinner("Creating cash game table..."):
+        resp = api_request('POST', f"{api_url}/poker/cash/create-table", json={
+            "walletAddress": pubkey,
+            "challenge": challenge,
+            "signature": signature,
+            "smallBlind": small_blind,
+            "bigBlind": big_blind,
+            "minBuyIn": min_buy_in,
+            "maxBuyIn": max_buy_in,
+            "maxSeats": max_seats,
+        })
+        result = resp.json()
+
+    if not result.get('success'):
+        Output.error(result.get('error', 'Unknown error'))
+        sys.exit(ExitCode.API_ERROR)
+
+    table = result['table']
+    Output.success("Cash game table created!")
+    print(f"\n  Table ID:   {table['id']}")
+    print(f"  Blinds:     {small_blind}/{big_blind} SOL")
+    print(f"  Buy-in:     {min_buy_in}-{max_buy_in} SOL")
+    print(f"  Seats:      {max_seats}")
+    print(f"\n  Join:  python mya.py poker cash join {table['id']} --buy-in {min_buy_in}")
+    print(f"  Watch: python mya.py poker cash watch {table['id']}")
+
+
+def cmd_cash_join(args: argparse.Namespace) -> None:
+    """Join a cash game table"""
+    table_id = getattr(args, 'table_id', None)
+    buy_in = getattr(args, 'buy_in', None)
+
+    if not table_id:
+        Output.error("Table ID required")
+        sys.exit(ExitCode.INVALID_INPUT)
+    if not buy_in or buy_in <= 0:
+        Output.error("Buy-in amount required (in SOL)")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    wallet = load_wallet()
+    pubkey = str(wallet.pubkey())
+    api_url = get_api_url()
+
+    # Check balance
+    balance = get_balance(pubkey)
+    required = buy_in + 0.01
+    if balance < required:
+        Output.error(f"Insufficient balance. Need ~{required:.4f} SOL, have {balance:.4f} SOL")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    # Step 1: Request seat + unsigned deposit tx
+    challenge, signature = get_poker_challenge("cash-join")
+    with Spinner("Requesting seat..."):
+        resp = api_request('POST', f"{api_url}/poker/cash/join", json={
+            "walletAddress": pubkey,
+            "challenge": challenge,
+            "signature": signature,
+            "tableId": table_id,
+            "buyIn": buy_in,
+        })
+        result = resp.json()
+
+    if not result.get('success'):
+        Output.error(result.get('error', 'Unknown error'))
+        sys.exit(ExitCode.API_ERROR)
+
+    deposit = result.get('deposit', {})
+    unsigned_tx = deposit.get('unsignedTx')
+
+    if unsigned_tx:
+        # Step 2: Sign and submit deposit
+        print("Signing deposit transaction...")
+        try:
+            tx_bytes = base64.b64decode(unsigned_tx)
+            tx = SoldersTransaction.from_bytes(tx_bytes)
+            signed_tx = wallet.sign_transaction(tx)
+            signed_b64 = base64.b64encode(bytes(signed_tx)).decode('utf-8')
+
+            # Submit signed tx
+            from solders.transaction import Transaction as SoldersTx
+            sig = str(signed_tx.signatures[0]) if signed_tx.signatures else ''
+
+            with Spinner("Confirming deposit on-chain..."):
+                confirm_challenge, confirm_sig = get_poker_challenge("cash-confirm-join")
+                confirm_resp = api_request('POST', f"{api_url}/poker/cash/confirm-join", json={
+                    "walletAddress": pubkey,
+                    "challenge": confirm_challenge,
+                    "signature": confirm_sig,
+                    "tableId": table_id,
+                    "txSignature": sig,
+                })
+                confirm_result = confirm_resp.json()
+
+            if confirm_result.get('success'):
+                seat = confirm_result.get('seat', {})
+                Output.success(f"Joined table! Seat #{seat.get('seatNumber', '?')}, {seat.get('chips', 0) / 1e9:.4f} SOL")
+                if confirm_result.get('handDealt'):
+                    print("  A new hand has been dealt!")
+            else:
+                Output.error(f"Deposit confirmation failed: {confirm_result.get('error', 'Unknown')}")
+                sys.exit(ExitCode.API_ERROR)
+        except Exception as e:
+            Output.error(f"Deposit failed: {e}")
+            sys.exit(ExitCode.API_ERROR)
+    else:
+        Output.success(f"Seated at table (seat #{result.get('seat', {}).get('seatNumber', '?')})")
+
+    # Auto-enter watch mode
+    print(f"\nAuto-starting watch mode...\n")
+    watch_args = argparse.Namespace(
+        table_id=table_id,
+        poll=2,
+        mode='ask',
+        verbose=False,
+    )
+    cmd_cash_watch(watch_args)
+
+
+def cmd_cash_leave(args: argparse.Namespace) -> None:
+    """Leave a cash game table"""
+    table_id = getattr(args, 'table_id', None)
+    if not table_id:
+        Output.error("Table ID required")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    wallet = load_wallet()
+    pubkey = str(wallet.pubkey())
+    api_url = get_api_url()
+
+    challenge, signature = get_poker_challenge("cash-leave")
+    with Spinner("Leaving table..."):
+        resp = api_request('POST', f"{api_url}/poker/cash/leave", json={
+            "walletAddress": pubkey,
+            "challenge": challenge,
+            "signature": signature,
+            "tableId": table_id,
+        })
+        result = resp.json()
+
+    if not result.get('success'):
+        Output.error(result.get('error', 'Unknown error'))
+        sys.exit(ExitCode.API_ERROR)
+
+    if result.get('deferred'):
+        Output.info(result.get('message', 'Leave deferred until hand completes'))
+    else:
+        chips = result.get('chipsSettled', 0)
+        settle_tx = result.get('settleTx')
+        Output.success(f"Left table. {chips / 1e9:.4f} SOL settled.")
+        if settle_tx:
+            print(f"  Tx: https://solscan.io/tx/{settle_tx}?cluster=devnet")
+
+
+def cmd_cash_reload(args: argparse.Namespace) -> None:
+    """Reload chips at a cash game table"""
+    table_id = getattr(args, 'table_id', None)
+    amount = getattr(args, 'amount', None)
+
+    if not table_id or not amount or amount <= 0:
+        Output.error("Table ID and amount (SOL) required")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    wallet = load_wallet()
+    pubkey = str(wallet.pubkey())
+    api_url = get_api_url()
+
+    balance = get_balance(pubkey)
+    if balance < amount + 0.01:
+        Output.error(f"Insufficient balance. Need ~{amount + 0.01:.4f} SOL, have {balance:.4f} SOL")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    # Get unsigned reload tx
+    challenge, signature = get_poker_challenge("cash-reload")
+    with Spinner("Building reload transaction..."):
+        resp = api_request('POST', f"{api_url}/poker/cash/reload", json={
+            "walletAddress": pubkey,
+            "challenge": challenge,
+            "signature": signature,
+            "tableId": table_id,
+            "amount": amount,
+        })
+        result = resp.json()
+
+    if not result.get('success'):
+        Output.error(result.get('error', 'Unknown error'))
+        sys.exit(ExitCode.API_ERROR)
+
+    deposit = result.get('deposit', {})
+    unsigned_tx = deposit.get('unsignedTx')
+
+    if unsigned_tx:
+        print("Signing reload transaction...")
+        try:
+            tx_bytes = base64.b64decode(unsigned_tx)
+            tx = SoldersTransaction.from_bytes(tx_bytes)
+            signed_tx = wallet.sign_transaction(tx)
+            sig = str(signed_tx.signatures[0]) if signed_tx.signatures else ''
+
+            with Spinner("Confirming reload on-chain..."):
+                confirm_challenge, confirm_sig = get_poker_challenge("cash-confirm-reload")
+                confirm_resp = api_request('POST', f"{api_url}/poker/cash/confirm-reload", json={
+                    "walletAddress": pubkey,
+                    "challenge": confirm_challenge,
+                    "signature": confirm_sig,
+                    "tableId": table_id,
+                    "txSignature": sig,
+                })
+                confirm_result = confirm_resp.json()
+
+            if confirm_result.get('success'):
+                Output.success(f"Reloaded! New stack: {confirm_result.get('chips', 0) / 1e9:.4f} SOL")
+            else:
+                Output.error(f"Reload failed: {confirm_result.get('error', 'Unknown')}")
+        except Exception as e:
+            Output.error(f"Reload failed: {e}")
+            sys.exit(ExitCode.API_ERROR)
+
+
+def display_cash_table(table_data: Dict[str, Any], wallet_address: str) -> None:
+    """Display multi-player cash game table state"""
+    table = table_data.get('table', {})
+    seats = table_data.get('seats', [])
+    hand = table_data.get('hand')
+
+    table_id = table.get('id', 'unknown')
+    sb_sol = table.get('smallBlind', 0) / 1e9
+    bb_sol = table.get('bigBlind', 0) / 1e9
+    status = table.get('status', 'unknown')
+    hand_num = table.get('handNumber', 0)
+
+    # Timer
+    timer_str = ""
+    if hand and hand.get('turnDeadline') and hand.get('status') not in ('complete', 'showdown'):
+        try:
+            from datetime import datetime, timezone
+            deadline_dt = datetime.fromisoformat(hand['turnDeadline'].replace('Z', '+00:00'))
+            remaining = (deadline_dt - datetime.now(timezone.utc)).total_seconds()
+            remaining = max(0, int(remaining))
+            mins, secs = divmod(remaining, 60)
+            timer_str = f" T {mins}:{secs:02d}"
+            if remaining < 30:
+                timer_str = Output.color(timer_str, 'red')
+        except Exception:
+            pass
+
+    W = 55
+    print()
+    print("+" + "=" * W + "+")
+    title = f"CASH TABLE  {sb_sol:.4f}/{bb_sol:.4f} SOL"
+    print(f"|{title:^{W}}|")
+    sub = f"#{table_id[:8]}  Hand {hand_num}  {status.upper()}{timer_str}"
+    print(f"|{sub:^{W}}|")
+    print("+" + "-" * W + "+")
+
+    if hand:
+        # Pot
+        pot_sol = hand.get('pot', 0) / 1e9
+        pot_line = f"  Pot: {pot_sol:.4f} SOL"
+        print(f"|{pot_line:<{W}}|")
+
+        # Side pots
+        side_pots = hand.get('sidePots')
+        if side_pots and len(side_pots) > 1:
+            for i, sp in enumerate(side_pots):
+                sp_line = f"    Side pot {i+1}: {sp['amount'] / 1e9:.4f} SOL (seats {sp['eligible_seats']})"
+                print(f"|{sp_line:<{W}}|")
+
+        # Community cards
+        community = hand.get('communityCards', [])
+        if community:
+            board_line = f"  Board: {format_hand(community)}"
+        else:
+            board_line = "  Board: (no cards yet)"
+        print(f"|{board_line:<{W}}|")
+
+        bet_to_match = hand.get('currentBet', 0) / 1e9
+        if bet_to_match > 0:
+            bet_line = f"  Bet to match: {bet_to_match:.4f} SOL"
+            print(f"|{bet_line:<{W}}|")
+
+    print("+" + "-" * W + "+")
+
+    # Seats
+    for s in sorted(seats, key=lambda x: x.get('seatNumber', 0)):
+        seat_num = s.get('seatNumber', '?')
+        name = s.get('name') or (s.get('wallet', '???')[:6] + '..' if s.get('wallet') else '???')
+        chips_sol = s.get('chips', 0) / 1e9
+        is_you = s.get('isYou', False)
+        is_folded = s.get('isFolded', False)
+        is_all_in = s.get('isAllIn', False)
+        is_current = hand and hand.get('currentTurnSeat') == seat_num
+
+        # Badges
+        badges = []
+        if hand:
+            if hand.get('dealerSeat') == seat_num:
+                badges.append("D")
+            if hand.get('smallBlindSeat') == seat_num:
+                badges.append("SB")
+            if hand.get('bigBlindSeat') == seat_num:
+                badges.append("BB")
+        if is_all_in:
+            badges.append("ALL-IN")
+        if is_folded:
+            badges.append("FOLD")
+        badge_str = f" [{'/'.join(badges)}]" if badges else ""
+
+        # Cards
+        hole_cards = s.get('holeCards')
+        if hole_cards:
+            cards_str = format_hand(hole_cards)
+        elif is_folded:
+            cards_str = "---"
+        else:
+            cards_str = "[?][?]"
+
+        # Current bet this round
+        bet = s.get('currentBet', 0) / 1e9
+        bet_str = f"  bet:{bet:.4f}" if bet > 0 else ""
+
+        marker = ">>>" if is_current else ("  *" if is_you else "   ")
+        player_label = "YOU" if is_you else name
+
+        line = f"{marker} Seat {seat_num}: {player_label}  {chips_sol:.4f} SOL  {cards_str}{badge_str}{bet_str}"
+        if is_current:
+            line = Output.color(line, 'green')
+        elif is_folded:
+            line = Output.color(line, 'white')
+        elif is_you:
+            line = Output.color(line, 'cyan')
+
+        # Truncate to fit
+        if len(line) > W:
+            line = line[:W-1] + ".."
+        print(f"|{line:<{W}}|")
+
+    print("+" + "=" * W + "+")
+
+    # Winners
+    if hand and hand.get('winnerSeats'):
+        for w in hand['winnerSeats']:
+            wline = f"  Seat {w['seat']} wins {w['amount'] / 1e9:.4f} SOL ({w['hand_rank']})"
+            print(Output.color(wline, 'yellow'))
+
+    # Your turn indicator
+    my_seat = None
+    for s in seats:
+        if s.get('isYou'):
+            my_seat = s
+            break
+
+    if my_seat and hand and hand.get('currentTurnSeat') == my_seat.get('seatNumber'):
+        print(Output.color("  YOUR TURN - fold | check | call | raise", 'green'))
+    elif hand and hand.get('status') not in ('complete', 'showdown', None):
+        turn_seat = hand.get('currentTurnSeat')
+        if turn_seat is not None:
+            turn_player = None
+            for s in seats:
+                if s.get('seatNumber') == turn_seat:
+                    turn_player = s.get('name') or (s.get('wallet', '?')[:6] + '..')
+                    break
+            if turn_player:
+                print(Output.color(f"  Waiting for {turn_player} (seat {turn_seat})...", 'cyan'))
+
+
+def ai_decide_cash_action(table_data: Dict[str, Any]) -> Tuple[str, Optional[int], str]:
+    """AI decision for cash game — seat-aware version."""
+    hand = table_data.get('hand', {})
+    seats = table_data.get('seats', [])
+
+    # Find our seat
+    my_seat = None
+    for s in seats:
+        if s.get('isYou'):
+            my_seat = s
+            break
+
+    if not my_seat:
+        return ('check', None, 'Cannot find our seat')
+
+    your_hand = my_seat.get('holeCards', [])
+    community = hand.get('communityCards', [])
+    current_bet = hand.get('currentBet', 0)
+    your_chips = my_seat.get('chips', 0)
+    my_bet = my_seat.get('currentBet', 0)
+    pot = hand.get('pot', 0)
+
+    to_call = current_bet - my_bet
+    if to_call < 0:
+        to_call = 0
+
+    if not your_hand:
+        return ('check', None, 'No hole cards visible')
+
+    # Evaluate hand strength (same heuristic as classic)
+    high_cards = set('TJQKA')
+    rank_names = {'T': '10', 'J': 'Jack', 'Q': 'Queen', 'K': 'King', 'A': 'Ace'}
+    ranks = []
+    for card in your_hand:
+        if isinstance(card, str) and len(card) >= 2:
+            ranks.append(card[0])
+
+    all_ranks = list(ranks)
+    for card in community:
+        if isinstance(card, str) and len(card) >= 2:
+            all_ranks.append(card[0])
+
+    from collections import Counter
+    rank_counts = Counter(all_ranks)
+    max_of_kind = max(rank_counts.values()) if rank_counts else 0
+
+    strength = 0.3
+    high_count = sum(1 for r in ranks if r in high_cards)
+    strength += high_count * 0.1
+
+    if max_of_kind >= 4:
+        strength = 0.95
+    elif max_of_kind >= 3:
+        strength = 0.85
+    elif max_of_kind >= 2:
+        strength += 0.25
+
+    suits = []
+    for card in your_hand:
+        if isinstance(card, str) and len(card) >= 2:
+            suits.append(card[-1])
+    if len(suits) >= 2 and suits[0] == suits[1]:
+        strength += 0.05
+
+    strength = min(1.0, strength)
+
+    hand_desc_parts = []
+    if max_of_kind >= 4:
+        hand_desc_parts.append("four of a kind")
+    elif max_of_kind >= 3:
+        hand_desc_parts.append("three of a kind")
+    elif max_of_kind >= 2:
+        paired = [r for r, c in rank_counts.items() if c >= 2]
+        paired_names = [rank_names.get(r, r) for r in paired]
+        hand_desc_parts.append(f"pair of {'/'.join(paired_names)}s")
+    if high_count > 0:
+        high_names = [rank_names.get(r, r) for r in ranks if r in high_cards]
+        hand_desc_parts.append(f"high: {', '.join(high_names)}")
+    hand_desc = ", ".join(hand_desc_parts) if hand_desc_parts else "no made hand"
+
+    if to_call == 0:
+        if strength > 0.6:
+            raise_amount = max(int(pot * 0.5), 10000000)
+            raise_amount = min(raise_amount, your_chips)
+            if raise_amount > 0:
+                return ('raise', raise_amount, f"Strength: {strength:.2f} ({hand_desc}). Strong — raising.")
+        return ('check', None, f"Strength: {strength:.2f} ({hand_desc}). Checking.")
+    else:
+        pot_odds = to_call / (pot + to_call) if (pot + to_call) > 0 else 1.0
+        if strength > 0.7:
+            raise_amount = max(int(pot * 0.5), 10000000)
+            raise_amount = min(raise_amount, your_chips - to_call)
+            if raise_amount > 0:
+                return ('raise', raise_amount, f"Strength: {strength:.2f} ({hand_desc}). Strong — raising.")
+            return ('call', None, f"Strength: {strength:.2f} ({hand_desc}). Strong — calling.")
+        elif strength > pot_odds + 0.1:
+            return ('call', None, f"Strength: {strength:.2f} ({hand_desc}). Good odds — calling.")
+        elif strength > 0.35 and to_call < pot * 0.3:
+            return ('call', None, f"Strength: {strength:.2f} ({hand_desc}). Small bet — calling.")
+        else:
+            return ('fold', None, f"Strength: {strength:.2f} ({hand_desc}). Weak — folding.")
+
+
+def cmd_cash_watch(args: argparse.Namespace) -> None:
+    """Watch a cash game table with auto-polling"""
+    table_id = getattr(args, 'table_id', None)
+    if not table_id:
+        Output.error("Table ID required")
+        sys.exit(ExitCode.INVALID_INPUT)
+
+    wallet = load_wallet()
+    pubkey = str(wallet.pubkey())
+    api_url = get_api_url()
+    poll_interval = getattr(args, 'poll', 2)
+    mode = getattr(args, 'mode', 'ask')
+    verbose = getattr(args, 'verbose', False)
+
+    print(f"Watching table {table_id[:8]}...")
+    print(f"Polling every {poll_interval}s. Press Ctrl+C to stop.\n")
+
+    play_mode = mode
+    if play_mode == 'ask':
+        print("How do you want to play when it's your turn?")
+        print("  [h] Human - you choose every action")
+        print("  [a] AI    - auto-play with strategy")
+        choice = input("Choose (h/a): ").strip().lower()
+        play_mode = 'ai' if choice == 'a' else 'human'
+        print(f"Mode: {'AI auto-play' if play_mode == 'ai' else 'Human control'}\n")
+
+    try:
+        while True:
+            resp = api_request('GET', f"{api_url}/poker/cash/table/{table_id}?wallet={pubkey}")
+            table_data = resp.json()
+
+            if sys.stdout.isatty():
+                print("\033[H\033[J", end="")
+
+            display_cash_table(table_data, pubkey)
+
+            hand = table_data.get('hand')
+            seats = table_data.get('seats', [])
+            table_info = table_data.get('table', {})
+
+            # Find our seat
+            my_seat = None
+            for s in seats:
+                if s.get('isYou'):
+                    my_seat = s
+                    break
+
+            # Check if it's our turn
+            is_our_turn = (
+                my_seat and hand and
+                hand.get('currentTurnSeat') == my_seat.get('seatNumber') and
+                hand.get('status') not in ('complete', 'showdown')
+            )
+
+            if table_info.get('status') == 'closed':
+                Output.info("Table is closed.")
+                break
+
+            if is_our_turn:
+                if play_mode == 'ai':
+                    action_input, amount_lamports, reasoning = ai_decide_cash_action(table_data)
+                    if verbose:
+                        print(Output.color(f"  Thinking... {reasoning}", 'cyan'))
+                        print(Output.color(f"  Decision: {action_input}" + (f" ({amount_lamports / 1e9:.4f} SOL)" if amount_lamports else ""), 'cyan'))
+                    else:
+                        print(Output.color(f"  AI decides: {action_input}" + (f" ({amount_lamports / 1e9:.4f} SOL)" if amount_lamports else ""), 'cyan'))
+                    time.sleep(1)
+                else:
+                    print("\nYOUR TURN - Choose action:")
+                    print("  fold | check | call | raise   (q to quit, a to switch to AI)")
+                    action_input = input("Enter action: ").strip().lower()
+
+                    if action_input == 'q':
+                        break
+                    if action_input == 'a':
+                        play_mode = 'ai'
+                        print(Output.color("  Switched to AI mode!", 'cyan'))
+                        continue
+
+                    if action_input not in ['fold', 'check', 'call', 'raise']:
+                        continue
+
+                    amount_lamports = None
+                    if action_input == 'raise':
+                        try:
+                            amount = float(input("Raise amount (SOL): "))
+                            amount_lamports = int(amount * 1e9)
+                        except ValueError:
+                            print("Invalid amount.")
+                            continue
+
+                challenge, signature = get_poker_challenge(f"cash-{action_input}")
+                payload = {
+                    "walletAddress": pubkey,
+                    "challenge": challenge,
+                    "signature": signature,
+                    "tableId": table_id,
+                    "action": action_input,
+                }
+                if amount_lamports:
+                    payload["amount"] = amount_lamports
+
+                try:
+                    action_resp = api_request('POST', f"{api_url}/poker/cash/action", json=payload)
+                    action_result = action_resp.json()
+                    if action_result.get('success'):
+                        msg = action_result.get('game', {}).get('message', '')
+                        if msg:
+                            print(f"  {msg}")
+                    else:
+                        print(Output.color(f"  Error: {action_result.get('error', 'Unknown')}", 'red'))
+                except Exception as e:
+                    print(Output.color(f"  Action failed: {e}", 'red'))
+
+                time.sleep(1)
+            else:
+                time.sleep(poll_interval)
+
+    except KeyboardInterrupt:
+        Output.info("\nStopped watching.")
+
+
+def cmd_cash_tables(args: argparse.Namespace) -> None:
+    """List open/active cash game tables"""
+    api_url = get_api_url()
+
+    with Spinner("Fetching tables..."):
+        resp = api_request('GET', f"{api_url}/poker/cash/tables")
+        result = resp.json()
+
+    tables = result.get('tables', [])
+    if not tables:
+        print("No open tables. Create one with: python mya.py poker cash create --small-blind 0.01 --big-blind 0.02")
+        return
+
+    W = 70
+    print()
+    print(f"{'ID':<10} {'Blinds':<18} {'Buy-in':<22} {'Players':<10} {'Status':<10}")
+    print("-" * W)
+    for t in tables:
+        tid = t['id'][:8]
+        blinds = f"{t['smallBlind']/1e9:.4f}/{t['bigBlind']/1e9:.4f}"
+        buyin = f"{t['minBuyIn']/1e9:.2f}-{t['maxBuyIn']/1e9:.2f} SOL"
+        players = f"{t['playerCount']}/{t['maxSeats']}"
+        status = t['status']
+        print(f"{tid:<10} {blinds:<18} {buyin:<22} {players:<10} {status:<10}")
+    print(f"\n{len(tables)} table(s) found.")
 
 
 def cmd_poker_create(args: argparse.Namespace) -> None:
@@ -3283,7 +4161,18 @@ def cmd_poker_create(args: argparse.Namespace) -> None:
 
     print(f"\nGame ID: {game_id}")
     print(f"Buy-in: {buy_in} SOL")
-    print(f"\nShare: python mya.py poker join {game_id}")
+    print(f"\nShare with opponent: python mya.py poker join {game_id}")
+    print(f"\nAuto-starting watch mode...\n")
+
+    # Auto-enter watch mode
+    watch_args = argparse.Namespace(
+        game_id=game_id,
+        poll=2,
+        headless=False,
+        mode='ask',
+        verbose=False,
+    )
+    cmd_poker_watch(watch_args)
 
 
 def cmd_poker_join(args: argparse.Namespace) -> None:
@@ -3360,11 +4249,21 @@ def cmd_poker_join(args: argparse.Namespace) -> None:
         return
 
     display_poker_table(result['game'], pubkey)
-    print(f"\nWatch the game: python mya.py poker watch {game_id}")
+    print(f"\nAuto-starting watch mode...\n")
+
+    # Auto-enter watch mode
+    watch_args = argparse.Namespace(
+        game_id=game_id,
+        poll=2,
+        headless=False,
+        mode='ask',
+        verbose=False,
+    )
+    cmd_poker_watch(watch_args)
 
 
 def cmd_poker_watch(args: argparse.Namespace) -> None:
-    """Auto-polling watch mode with action prompts"""
+    """Auto-polling watch mode with human/AI action control"""
     game_id = getattr(args, 'game_id', None)
     if not game_id:
         Output.error("Game ID required")
@@ -3375,11 +4274,23 @@ def cmd_poker_watch(args: argparse.Namespace) -> None:
     api_url = get_api_url()
     poll_interval = getattr(args, 'poll', 2)
     headless = getattr(args, 'headless', False)
+    mode = getattr(args, 'mode', 'ask')  # human | ai | ask
+    verbose = getattr(args, 'verbose', False)
     rt = get_runtime()
 
     if not headless:
         print(f"Watching game {game_id[:8]}...")
         print(f"Polling every {poll_interval}s. Press Ctrl+C to stop.\n")
+
+    # Determine play mode
+    play_mode = mode  # 'human', 'ai', or 'ask'
+    if play_mode == 'ask' and not headless:
+        print("How do you want to play when it's your turn?")
+        print("  [h] Human — you choose every action")
+        print("  [a] AI    — auto-play with strategy")
+        choice = input("Choose (h/a): ").strip().lower()
+        play_mode = 'ai' if choice == 'a' else 'human'
+        print(f"Mode: {'AI auto-play' if play_mode == 'ai' else 'Human control'}\n")
 
     try:
         while True:
@@ -3405,32 +4316,141 @@ def cmd_poker_watch(args: argparse.Namespace) -> None:
                 winner = game.get('winner')
                 if isinstance(winner, dict):
                     if winner.get('wallet') == pubkey:
-                        Output.success("You won!")
+                        Output.success("🏆 You won!")
                     else:
                         Output.info(f"Game over. Winner: {winner.get('name') or winner.get('wallet', '?')[:8]}")
                 elif winner == pubkey:
-                    Output.success("You won!")
+                    Output.success("🏆 You won!")
                 elif winner:
                     Output.info("Game over. Opponent won.")
                 else:
                     Output.info("Game ended in a tie.")
-                break
 
-            if game.get('yourTurn'):
-                print("\nYOUR TURN - Choose action:")
-                print("  fold | check | call | raise   (q to quit)")
-                action_input = input("Enter action: ").strip().lower()
+                # Show settlement info
+                settlement = game.get('settlementTx')
+                if settlement:
+                    print(f"  Settlement: https://solscan.io/tx/{settlement}?cluster=devnet")
 
-                if action_input == 'q':
+                # --- Play Again? ---
+                buy_in_lamports = game.get('buyInLamports', game.get('pot', 0))
+                buy_in_sol = game.get('buyIn', buy_in_lamports / 1e9 if buy_in_lamports else 0.01)
+                if not isinstance(buy_in_sol, (int, float)) or buy_in_sol <= 0:
+                    buy_in_sol = 0.01
+
+                try:
+                    again = input(f"\nPlay again? Same buy-in ({buy_in_sol:.2f} SOL). (y/n): ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
                     break
 
-                if action_input not in ['fold', 'check', 'call', 'raise']:
-                    continue
+                if again != 'y':
+                    break
 
-                amount_lamports = None
-                if action_input == 'raise':
-                    amount = float(input("Raise amount (SOL): "))
-                    amount_lamports = int(amount * 1e9)
+                # Check balance for top-up
+                balance = get_balance(pubkey)
+                required = buy_in_sol + 0.01
+                if balance < required:
+                    print(f"\nLow balance: {balance:.4f} SOL (need {required:.4f} SOL)")
+                    try:
+                        topup = input("Fund your wallet and press Enter when ready (or 'n' to quit): ").strip()
+                    except (EOFError, KeyboardInterrupt):
+                        break
+                    if topup.lower() == 'n':
+                        break
+                    balance = get_balance(pubkey)
+                    if balance < required:
+                        Output.error(f"Still insufficient: {balance:.4f} SOL")
+                        break
+
+                # Create new game
+                print(f"\nCreating new game with {buy_in_sol:.2f} SOL buy-in...")
+                try:
+                    challenge, signature = get_poker_challenge("poker-create")
+                    with Spinner("Creating game..."):
+                        resp = api_request('POST', f"{api_url}/poker/create", json={
+                            "walletAddress": pubkey,
+                            "challenge": challenge,
+                            "signature": signature,
+                            "buyIn": buy_in_sol,
+                        })
+                        create_result = resp.json()
+
+                    if not create_result.get('success'):
+                        Output.error(f"Failed to create game: {create_result.get('error', 'Unknown')}")
+                        break
+
+                    new_game_id = create_result['game']['id']
+
+                    # Sign escrow if returned
+                    escrow = create_result.get('escrow')
+                    if escrow and escrow.get('unsignedTx'):
+                        try:
+                            tx_bytes = base64.b64decode(escrow['unsignedTx'])
+                            tx = SoldersTransaction.from_bytes(tx_bytes)
+                            signed_tx = wallet.sign_transaction(tx)
+                            signed_b64 = base64.b64encode(bytes(signed_tx)).decode('utf-8')
+                            confirm_challenge, confirm_sig = get_poker_challenge("poker-confirm-create")
+                            confirm_resp = api_request('POST', f"{api_url}/poker/confirm-create", json={
+                                "walletAddress": pubkey,
+                                "challenge": confirm_challenge,
+                                "signature": confirm_sig,
+                                "signedTransaction": signed_b64,
+                                "buyIn": buy_in_sol,
+                                "gameId": int(escrow['onChainGameId']),
+                            })
+                            confirm_result = confirm_resp.json()
+                            if confirm_result.get('success'):
+                                new_game_id = confirm_result['game']['id']
+                                Output.success("New game created with escrow!")
+                            else:
+                                Output.error(f"Escrow failed: {confirm_result.get('error', 'Unknown')}")
+                                break
+                        except Exception as e:
+                            Output.error(f"Escrow signing failed: {e}")
+                            break
+
+                    game_id = new_game_id
+                    print(f"New game: {game_id}")
+                    print(f"Share with opponent: python mya.py poker join {game_id}")
+                    print("Waiting for opponent...\n")
+                    continue  # Re-enter watch loop with new game_id
+                except Exception as e:
+                    Output.error(f"Failed to create new game: {e}")
+                    break
+
+            if game.get('yourTurn'):
+                if play_mode == 'ai':
+                    # AI auto-play
+                    action_input, amount_lamports, reasoning = ai_decide_poker_action(game)
+                    if verbose:
+                        print(Output.color(f"  🧠 Thinking... {reasoning}", 'cyan'))
+                        print(Output.color(f"  🤖 Decision: {action_input}" + (f" ({amount_lamports / 1e9:.4f} SOL)" if amount_lamports else ""), 'cyan'))
+                    else:
+                        print(Output.color(f"  🤖 AI decides: {action_input}" + (f" ({amount_lamports / 1e9:.4f} SOL)" if amount_lamports else ""), 'cyan'))
+                    time.sleep(1)  # Brief pause so human can see the decision
+                else:
+                    # Human interactive mode
+                    print("\nYOUR TURN - Choose action:")
+                    print("  fold | check | call | raise   (q to quit, a to switch to AI)")
+                    action_input = input("Enter action: ").strip().lower()
+
+                    if action_input == 'q':
+                        break
+                    if action_input == 'a':
+                        play_mode = 'ai'
+                        print(Output.color("  Switched to AI mode!", 'cyan'))
+                        continue
+
+                    if action_input not in ['fold', 'check', 'call', 'raise']:
+                        continue
+
+                    amount_lamports = None
+                    if action_input == 'raise':
+                        try:
+                            amount = float(input("Raise amount (SOL): "))
+                            amount_lamports = int(amount * 1e9)
+                        except ValueError:
+                            print("Invalid amount.")
+                            continue
 
                 challenge, signature = get_poker_challenge(f"poker-{action_input}")
 
@@ -3444,7 +4464,18 @@ def cmd_poker_watch(args: argparse.Namespace) -> None:
                 if amount_lamports:
                     payload["amount"] = amount_lamports
 
-                api_request('POST', f"{api_url}/poker/action", json=payload)
+                try:
+                    action_resp = api_request('POST', f"{api_url}/poker/action", json=payload)
+                    action_result = action_resp.json()
+                    if action_result.get('success'):
+                        msg = action_result.get('game', {}).get('message', '')
+                        if msg:
+                            print(f"  {msg}")
+                    else:
+                        print(Output.color(f"  Error: {action_result.get('error', 'Unknown')}", 'red'))
+                except Exception as e:
+                    print(Output.color(f"  Action failed: {e}", 'red'))
+
                 time.sleep(1)
             else:
                 time.sleep(poll_interval)
@@ -3997,6 +5028,8 @@ def main() -> None:
     poker_watch_p.add_argument("game_id", help="Game ID to watch")
     poker_watch_p.add_argument("--poll", type=int, default=2, help="Poll interval in seconds (default: 2)")
     poker_watch_p.add_argument("--headless", action="store_true", help="Non-interactive mode for AI agents (no stdin prompts)")
+    poker_watch_p.add_argument("--mode", choices=["human", "ai", "ask"], default="ask", help="Play mode: human (you decide), ai (auto-play), ask (prompt at start)")
+    poker_watch_p.add_argument("--verbose", "-v", action="store_true", help="Show AI reasoning each turn")
 
     poker_action_p = poker_subs.add_parser("action", help="Perform action")
     poker_action_p.add_argument("game_id", help="Game ID")
@@ -4019,6 +5052,36 @@ def main() -> None:
 
     poker_cancel_p = poker_subs.add_parser("cancel", help="Cancel a waiting game")
     poker_cancel_p.add_argument("game_id", help="Game ID to cancel")
+
+    # Cash game subcommands
+    cash_p = poker_subs.add_parser("cash", help="Multi-player cash games (2-6 players)")
+    cash_subs = cash_p.add_subparsers(dest="cash_cmd")
+
+    cash_create_p = cash_subs.add_parser("create", help="Create cash game table")
+    cash_create_p.add_argument("--small-blind", type=float, default=0.01)
+    cash_create_p.add_argument("--big-blind", type=float, default=0.02)
+    cash_create_p.add_argument("--min-buy-in", type=float)
+    cash_create_p.add_argument("--max-buy-in", type=float)
+    cash_create_p.add_argument("--seats", type=int, default=6)
+
+    cash_join_p = cash_subs.add_parser("join", help="Join table")
+    cash_join_p.add_argument("table_id")
+    cash_join_p.add_argument("--buy-in", type=float, required=True)
+
+    cash_leave_p = cash_subs.add_parser("leave", help="Leave table")
+    cash_leave_p.add_argument("table_id")
+
+    cash_reload_p = cash_subs.add_parser("reload", help="Reload chips")
+    cash_reload_p.add_argument("table_id")
+    cash_reload_p.add_argument("--amount", type=float, required=True)
+
+    cash_watch_p = cash_subs.add_parser("watch", help="Watch table")
+    cash_watch_p.add_argument("table_id")
+    cash_watch_p.add_argument("--poll", type=int, default=2)
+    cash_watch_p.add_argument("--mode", choices=["human", "ai", "ask"], default="ask")
+    cash_watch_p.add_argument("--verbose", "-v", action="store_true")
+
+    cash_tables_p = cash_subs.add_parser("tables", help="List tables")
 
     args = parser.parse_args()
     
