@@ -704,12 +704,16 @@ def set_runtime(config: RuntimeConfig) -> None:
 
 # ============== .ENV SUPPORT ==============
 
+# Only load these vars from .env — all others are ignored
+ALLOWED_ENV_VARS = {"MYA_API_URL", "MYA_API_KEY", "MYA_SSL_VERIFY", "HELIUS_RPC", "SOLANA_RPC_URL"}
+
+
 def load_dotenv(path: Optional[Path] = None) -> Dict[str, str]:
-    """Load .env file."""
+    """Load .env file (whitelisted vars only)."""
     env_vars: Dict[str, str] = {}
     search_paths = [path] if path else []
     search_paths.extend([Path.home() / ".mintyouragent" / ".env"])
-    
+
     for env_path in search_paths:
         if env_path and env_path.exists():
             try:
@@ -719,9 +723,10 @@ def load_dotenv(path: Optional[Path] = None) -> Dict[str, str]:
                         if line and not line.startswith('#') and '=' in line:
                             key, _, value = line.partition('=')
                             key, value = key.strip(), value.strip().strip('"\'')
-                            env_vars[key] = value
-                            if key not in os.environ:
-                                os.environ[key] = value
+                            if key in ALLOWED_ENV_VARS:
+                                env_vars[key] = value
+                                if key not in os.environ:
+                                    os.environ[key] = value
                 break
             except:
                 continue
@@ -2782,11 +2787,12 @@ def cmd_soul(args: argparse.Namespace) -> None:
     # Find workspace root (look for SOUL.md or .git)
     workspace = None
     search_paths = [
-        Path.cwd(),
         Path.home() / "clawd",
         Path.home() / ".clawdbot",
-        Path(os.environ.get("CLAWDBOT_WORKSPACE", "")),
     ]
+    clawdbot_ws = os.environ.get("CLAWDBOT_WORKSPACE", "")
+    if clawdbot_ws:
+        search_paths.append(Path(clawdbot_ws))
     
     for path in search_paths:
         if path.exists() and (path / "SOUL.md").exists():

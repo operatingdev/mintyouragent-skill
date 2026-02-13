@@ -267,7 +267,7 @@ MYA_API_KEY=your_api_key
 HELIUS_RPC=https://your-rpc.helius.xyz
 ```
 
-The CLI loads `.env` from `~/.mintyouragent/.env` only (the skill's own data directory).
+The CLI loads `.env` from `~/.mintyouragent/.env` only. **Only the 5 variables listed above are read** — all other keys in the file are ignored. This prevents accidental exposure of unrelated secrets.
 
 ---
 
