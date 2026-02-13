@@ -1,6 +1,6 @@
 ---
 name: mintyouragent
-description: Launch Solana tokens and play poker autonomously. Pure Python CLI - no bash/jq/solana-cli needed. Works on Windows, Mac, Linux.
+description: AI agent toolkit for Solana — launch tokens, play poker, link your agent identity to mintyouragent.com. Reads agent personality files (SOUL.md) for profile linking. Stores wallet in ~/.mintyouragent/. Pure Python CLI.
 version: 3.5.0
 ---
 
@@ -259,17 +259,15 @@ python mya.py launch --dry-run \
 
 ### .env File Support
 
-Create a `.env` file in your project or `~/.mintyouragent/.env`:
+Create a `.env` file in `~/.mintyouragent/.env`:
 
 ```bash
-# .env
+# ~/.mintyouragent/.env
 MYA_API_KEY=your_api_key
 HELIUS_RPC=https://your-rpc.helius.xyz
 ```
 
-The CLI loads `.env` from:
-1. Current directory
-2. `~/.mintyouragent/.env`
+The CLI loads `.env` from `~/.mintyouragent/.env` only (the skill's own data directory).
 
 ---
 

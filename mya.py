@@ -708,7 +708,7 @@ def load_dotenv(path: Optional[Path] = None) -> Dict[str, str]:
     """Load .env file."""
     env_vars: Dict[str, str] = {}
     search_paths = [path] if path else []
-    search_paths.extend([Path.cwd() / ".env", Path.home() / ".mintyouragent" / ".env"])
+    search_paths.extend([Path.home() / ".mintyouragent" / ".env"])
     
     for env_path in search_paths:
         if env_path and env_path.exists():
