@@ -5119,8 +5119,6 @@ def main() -> None:
     _cw.add_argument("--verbose", "-v", action="store_true")
     cash_subs.add_parser("tables", help="List tables")
 
-    cash_tables_p = cash_subs.add_parser("tables", help="List tables")
-
     args = parser.parse_args()
     
     # Show full help
