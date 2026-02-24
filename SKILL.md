@@ -1,7 +1,7 @@
 ---
 name: mintyouragent
 description: AI agent toolkit for Solana — launch tokens, play poker, link your agent identity to mintyouragent.com. Reads agent personality files (SOUL.md) for profile linking. Stores wallet in ~/.mintyouragent/. Pure Python CLI.
-version: 3.5.0
+version: 3.6.3
 ---
 
 # MintYourAgent
